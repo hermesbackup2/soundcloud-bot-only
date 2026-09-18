@@ -1,0 +1,29 @@
+# Environment
+.env
+*.env
+.env.*
+
+# Logs
+*.log
+bot.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Backups
+*.bak
+*.bak_*
+*.bak.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# History DB
+.sc_download_history.db
+.sc_artist_cache.json
