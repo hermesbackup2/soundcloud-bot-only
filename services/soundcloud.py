@@ -265,18 +265,42 @@ def get_playlist_tracks(url: str) -> Tuple[str, List[Dict[str, Any]]]:
 
 
 def search_tracks(query: str, offset: int, limit: int) -> Tuple[List[Dict[str, Any]], bool]:
-    search_url = f"scsearch{limit}:{query}"
-    info = _extract_info(search_url)
-    if not info:
-        return [], False
+    """Search with fallback to first word if full query fails. Skips DJ mixes."""
+    queries = [query]
+    
+    words = query.split()
+    if len(words) > 1:
+        queries.append(words[0])
+    
+    seen = set()
     tracks = []
-    for entry in info.get('entries', []):
-        t = _normalize_track(entry)
-        if t:
+    
+    for q in queries:
+        search_url = f"scsearch{limit}:{q}"
+        info = _extract_info(search_url)
+        if not info:
+            continue
+        for entry in info.get('entries', []):
+            t = _normalize_track(entry)
+            if not t or t.get('id') in seen:
+                continue
+            
+            # حذف نتایجی که توی title یا artist شون "dj" دارن
+            title = (t.get('title') or '').lower()
+            artist = (t.get('user') or {}).get('username', '').lower()
+            
+            if 'dj ' in title or 'dj ' in artist or 'dj-' in title or 'dj-' in artist:
+                continue
+            if title.startswith('dj') or artist.startswith('dj'):
+                continue
+            
+            seen.add(t.get('id'))
             tracks.append(t)
-    has_more = len(tracks) == limit
-    return tracks, has_more
-
+        
+        if tracks:
+            break
+    
+    return tracks[:limit], len(tracks) >= limit
 
 def get_track_info(track_id: Any) -> Optional[Dict[str, Any]]:
     """Deprecated — kept for backward compatibility."""
