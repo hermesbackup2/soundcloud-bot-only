@@ -30,6 +30,15 @@ from services import history
 from services.queue import download_queue
 from sessions import user_sessions, touch_session, cleanup_old_sessions
 
+# === YOUTUBE FEATURE START ===
+try:
+    from services import youtube as yt
+    YOUTUBE_ENABLED = True
+except ImportError:
+    YOUTUBE_ENABLED = False
+# === YOUTUBE FEATURE END ===
+
+
 from logging.handlers import RotatingFileHandler
 from config import LOG_FILE, LOG_MAX_BYTES, LOG_BACKUP_COUNT
 
@@ -285,6 +294,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Send multiple links in one message\n"
         "• They get queued and downloaded\n"
         "\n"
+    )
+
+    # === YOUTUBE START MESSAGE START ===
+    if YOUTUBE_ENABLED:
+        text += (
+            "🎬 YouTube Audio:\n"
+            "• Send a YouTube video link\n"
+            "• Bot extracts the audio as MP3\n"
+            "\n"
+        )
+    # === YOUTUBE START MESSAGE END ===
+
+    text += (
         "📊 Commands:\n"
         "• /history — Your last 20 downloads\n"
         "• /stats — Your download statistics\n"
@@ -298,7 +320,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🚀 Get started:\n"
         "Send a link or song name:"
     )
+
     await update.message.reply_text(text)
+
 
 
 def extract_soundcloud_urls(text: str) -> list:
@@ -328,6 +352,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     touch_session(uid)
 
     try:
+        # === YOUTUBE FEATURE START ===
+        if YOUTUBE_ENABLED and yt.is_youtube_url(text):
+            yt_url = yt.extract_youtube_url(text)
+            if yt_url:
+                await handle_youtube(update, context, yt_url)
+                return
+        # === YOUTUBE FEATURE END ===
         urls = extract_soundcloud_urls(text)
 
         if len(urls) > 1:
@@ -1045,6 +1076,91 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("📭 صف فعالی ندارید.")
 
+
+# === YOUTUBE FEATURE START ===
+async def handle_youtube(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+):
+    """Extract audio from YouTube and send as MP3."""
+    uid = update.effective_user.id
+    if not is_authorized(uid):
+        await reject_unauthorized(update)
+        return
+
+    msg = await update.message.reply_text("⏳ در حال دریافت اطلاعات ویدیو...")
+
+    info = await asyncio.to_thread(yt.get_video_info, url, PROXY_URL)
+    if not info:
+        await msg.edit_text("❌ اطلاعات ویدیو پیدا نشد.")
+        return
+
+    title = (info.get("title") or "Unknown")[:100]
+    artist = (info.get("uploader") or "YouTube")[:50]
+    duration = int(info.get("duration") or 0)
+
+    await msg.edit_text(f"⬇️ در حال دانلود: {title}")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            safe_name = "".join(
+                c for c in title if c.isalnum() or c in " -_()."
+            ).strip()[:80] or "youtube"
+            mp3_path = os.path.join(tmp_dir, f"{safe_name}.mp3")
+
+            ok, err = await asyncio.to_thread(
+                yt.download_youtube_audio, url, mp3_path, PROXY_URL
+            )
+            if not ok:
+                await msg.edit_text(err or "❌ دانلود ناموفق")
+                return
+
+            is_valid = await asyncio.to_thread(validate_mp3, mp3_path)
+            if not is_valid:
+                await msg.edit_text("❌ فایل دانلود شده خراب است.")
+                return
+
+            thumb_path = await asyncio.to_thread(
+                add_cover_art_to_mp3, mp3_path, {
+                    "title": title,
+                    "user": {"username": artist},
+                    "artwork_url": info.get("thumbnail"),
+                }
+            )
+
+            with open(mp3_path, "rb") as audio_file:
+                thumb_file = (
+                    open(thumb_path, "rb")
+                    if thumb_path and os.path.exists(thumb_path)
+                    else None
+                )
+                try:
+                    await update.message.reply_audio(
+                        audio=audio_file,
+                        title=title,
+                        performer=artist,
+                        duration=duration,
+                        caption=None,
+                        thumbnail=thumb_file,
+                    )
+                    try:
+                        await asyncio.to_thread(
+                            history.add_download,
+                            uid, info.get("id"), title, artist, url, duration * 1000,
+                        )
+                    except Exception:
+                        logger.exception("history log failed")
+                finally:
+                    if thumb_file:
+                        thumb_file.close()
+
+            await msg.delete()
+
+    except Exception:
+        logger.exception("YouTube download error")
+        await msg.edit_text("❌ دانلود یا ارسال فایل انجام نشد.")
+# === YOUTUBE FEATURE END ===
 
 def main():
     app = (
