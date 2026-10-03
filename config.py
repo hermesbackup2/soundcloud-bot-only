@@ -11,6 +11,19 @@ if not BOT_TOKEN:
 
 ALLOWED_USER_IDS = [7747086163, 1994789266, 6605229065, 78198236, 5080898408]
 
+# Admin users who can use /userhistory
+ADMIN_USER_IDS = [1994789266]
+
+# Display names for users (shown in /userhistory instead of IDs)
+USER_NAMES = {
+    1994789266: "admin",
+    5080898408: "hesam",
+    7747086163: "ali",
+    6605229065: "user3",
+    78198236: "Mehdi",
+}
+
+
 PAGE_SIZE = 10
 SEARCH_PAGE_SIZE = 10
 
