@@ -20,6 +20,8 @@ from telegram.ext import (
 from services import soundcloud as sc
 from config import (
     BOT_TOKEN,
+    ADMIN_USER_IDS,
+    USER_NAMES,
     PROXY_URL,
     ALLOWED_USER_IDS,
     PAGE_SIZE,
@@ -414,6 +416,8 @@ async def handle_multiple_tracks(
 async def handle_single_track(
     update: Update, context: ContextTypes.DEFAULT_TYPE, url: str
 ):
+    uid = update.effective_user.id
+
     msg = await update.message.reply_text("⏳ در حال دریافت اطلاعات ترک...")
 
     data = await asyncio.to_thread(sc.resolve_soundcloud_url, url)
@@ -1162,6 +1166,83 @@ async def handle_youtube(
         await msg.edit_text("❌ دانلود یا ارسال فایل انجام نشد.")
 # === YOUTUBE FEATURE END ===
 
+
+# === ADMIN: /userhistory ===
+
+def display_name(user_id: int) -> str:
+    """Return display name for a user, or the ID if not in mapping."""
+    return USER_NAMES.get(user_id, str(user_id))
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_USER_IDS
+
+
+async def userhistory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command: show download history."""
+    uid = update.effective_user.id
+    if not is_authorized(uid):
+        await reject_unauthorized(update)
+        return
+    if not is_admin(uid):
+        await update.message.reply_text("⛔ فقط ادمین.")
+        return
+
+    args = context.args or []
+
+    if args and args[0].lower() == "all":
+        rows = history.get_recent_downloads(limit=50)
+        if not rows:
+            await update.message.reply_text("📭 هیچ دانلودی ثبت نشده.")
+            return
+        lines = ["📜 ۵۰ دانلود آخر (همه کاربران):\n"]
+        for i, r in enumerate(rows, 1):
+            title = (r.get("title") or "?")[:40]
+            artist = (r.get("artist") or "?")[:25]
+            user = r.get("user_id")
+            date = (r.get("created_at") or "")[:16]
+            lines.append(f"{i}. [{display_name(user)}] {artist} - {title} ({date})")
+        text = "\n".join(lines)
+        for chunk in [text[i:i+4000] for i in range(0, len(text), 4000)]:
+            await update.message.reply_text(chunk)
+        return
+
+    if args:
+        try:
+            target_uid = int(args[0])
+        except ValueError:
+            await update.message.reply_text("❌ آیدی معتبر نیست.")
+            return
+        rows = history.get_user_downloads(target_uid, limit=20)
+        if not rows:
+            await update.message.reply_text(f"📭 کاربر {display_name(target_uid)} دانلودی نداره.")
+            return
+        lines = [f"📜 ۲۰ دانلود آخر کاربر {display_name(target_uid)}:\n"]
+        for i, r in enumerate(rows, 1):
+            title = (r.get("title") or "?")[:50]
+            artist = (r.get("artist") or "?")[:30]
+            date = (r.get("created_at") or "")[:16]
+            lines.append(f"{i}. {artist} - {title} ({date})")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    rows = history.get_all_users_stats()
+    if not rows:
+        await update.message.reply_text("📭 هیچ دانلودی ثبت نشده.")
+        return
+    lines = ["👥 کاربران و تعداد دانلود:\n"]
+    for r in rows:
+        uid_ = r.get("user_id")
+        total = r.get("total")
+        last = (r.get("last_download") or "")[:16]
+        artists = r.get("unique_artists")
+        lines.append(f"• {display_name(uid_)} → {total} دانلود ({artists} خواننده) - آخرین: {last}")
+    lines.append("\n💡 /userhistory <id> → ۲۰ دانلود آخر کاربر")
+    lines.append("💡 /userhistory all → ۵۰ دانلود آخر همه")
+    await update.message.reply_text("\n".join(lines))
+
+
+
 def main():
     app = (
         Application.builder()
@@ -1177,6 +1258,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("queue", queue_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("userhistory", userhistory_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
